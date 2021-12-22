@@ -33,13 +33,12 @@ type Service(transactions : StockTransaction.Service, locations : Location.Servi
                 return success
         }
         aux
-    let run transactionId req = execute transactionId (Some req)
 
     member __.Adjust(transactionId, location, quantity) =
-        run transactionId (StockTransaction.Events.AdjustmentRequested { location = location; quantity = quantity })
+        execute transactionId (Some (StockTransaction.Events.AdjustmentRequested { location = location; quantity = quantity }))
 
     member __.TryTransfer(transactionId, source, destination, quantity) =
-        run transactionId (StockTransaction.Events.TransferRequested { source = source; destination = destination; quantity = quantity })
+        execute transactionId (Some (StockTransaction.Events.TransferRequested { source = source; destination = destination; quantity = quantity }))
 
     /// Used by Watchdog to force conclusion of a transaction whose progress has stalled
     member __.Drive(transactionId) = async {
