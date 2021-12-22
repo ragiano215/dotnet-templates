@@ -143,33 +143,23 @@ let decide transactionId command (state: Fold.State) =
     | Fold.Open (Fold.Current cur) -> (if accepted then Accepted cur else Denied), events
     | s -> failwithf "Unexpected state %A" s
 
-type Service internal (resolve : LocationId * LocationEpochId -> Equinox.Stream<Events.Event, Fold.State>) =
+type Service internal (resolve : LocationId * LocationEpochId -> Equinox.Decider<Events.Event, Fold.State>) =
 
     member __.Sync<'R>(locationId, epochId, prevEpochBalanceCarriedForward, decide, shouldClose) : Async<Result<'R>> =
-        let stream = resolve (locationId, epochId)
-        stream.Transact(sync prevEpochBalanceCarriedForward decide shouldClose)
+        let decider = resolve (locationId, epochId)
+        decider.Transact(sync prevEpochBalanceCarriedForward decide shouldClose)
 
-let create resolve maxAttempts =
-    let resolve locationId =
-        let stream = resolve (streamName locationId)
-        Equinox.Stream(Serilog.Log.ForContext<Service>(), stream, maxAttempts=maxAttempts)
-    Service (resolve)
+open Fc.Domain
 
-module Cosmos =
+module Config =
 
-    open Equinox.Cosmos
+    let private resolveStream = function
+        | Config.Store.Cosmos (context, cache) ->
+            let cat = Config.Cosmos.createUnoptimized Events.codec Fold.initial Fold.fold (context, cache)
+            cat.Resolve
+        | Config.Store.Esdb (context, cache) ->
+            let cat = Config.Esdb.create Events.codec Fold.initial Fold.fold (context, cache)
+            cat.Resolve
 
-    let accessStrategy = AccessStrategy.Unoptimized
-    let create (context, cache, maxAttempts) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        create resolver.Resolve maxAttempts
-
-module EventStore =
-
-    open Equinox.EventStore
-
-    let create (context, cache, maxAttempts) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy)
-        create resolver.Resolve maxAttempts
+    let private resolveDecider store = streamName >> resolveStream store >> Config.createDecider
+    let create = resolveDecider >> Service

@@ -27,41 +27,27 @@ let interpretAdvanceIngestionEpoch (epochId : LocationEpochId) (state : Fold.Sta
 
     [if state |> Option.forall (fun s -> s < epochId) then yield Events.Started { epoch = epochId }]
 
-type Service internal (resolve : LocationId -> Equinox.Stream<Events.Event, Fold.State>) =
+type Service internal (resolve : LocationId -> Equinox.Decider<Events.Event, Fold.State>) =
 
     member __.TryReadIngestionEpoch(locationId) : Async<LocationEpochId option> =
-        let stream = resolve locationId
-        stream.Query id
+        let decider = resolve locationId
+        decider.Query id
 
     member __.AdvanceIngestionEpoch(locationId, epochId) : Async<unit> =
-        let stream = resolve locationId
-        stream.Transact(interpretAdvanceIngestionEpoch epochId)
+        let decider = resolve locationId
+        decider.Transact(interpretAdvanceIngestionEpoch epochId)
 
-let create resolve maxAttempts =
-    let opt = Equinox.ResolveOption.AllowStale
-    let resolve locationId =
-        let stream = resolve (streamName locationId, opt)
-        Equinox.Stream(Serilog.Log.ForContext<Service>(), stream, maxAttempts=maxAttempts)
-    Service(resolve)
+open Fc.Domain
 
-module Cosmos =
+module Config =
 
-    open Equinox.Cosmos
+    let private resolveStream = function
+        | Config.Store.Cosmos (context, cache) ->
+            let cat = Config.Cosmos.createLatestKnown Events.codec Fold.initial Fold.fold (context, cache)
+            fun sn -> cat.Resolve(sn, option = Equinox.AllowStale)
+        | Config.Store.Esdb (context, cache) ->
+            let cat = Config.Esdb.createLatestKnown Events.codec Fold.initial Fold.fold (context, cache)
+            fun sn -> cat.Resolve(sn, option = Equinox.AllowStale)
 
-    let accessStrategy = AccessStrategy.LatestKnownEvent
-    let create (context, cache, maxAttempts) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        let resolve (id, opt) = resolver.Resolve(id, opt)
-        create resolve maxAttempts
-
-module EventStore =
-
-    open Equinox.EventStore
-
-    let accessStrategy = AccessStrategy.LatestKnownEvent
-    let create (context, cache, maxAttempts) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        let resolve (id, opt) = resolver.Resolve(id, opt)
-        create resolve maxAttempts
+    let private resolveDecider store = streamName >> resolveStream store >> Config.createDecider
+    let create = resolveDecider >> Service

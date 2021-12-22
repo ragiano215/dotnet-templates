@@ -67,24 +67,12 @@ type Service internal (inventoryId, series : Series.Service, epochs : Epoch.Serv
     /// Feeds the events into the sequence of transactions. Returns the number actually added [excluding duplicates]
     member __.Ingest(events : Epoch.Events.Event list) : Async<int> = tryIngest events
 
-module internal Helpers =
-
-    let create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (series, epochs) =
+module Config =
+    let create inventoryId (maxTransactionsPerEpoch, lookBackLimit) store =
         let remainingEpochCapacity (state: Epoch.Fold.State) =
             let currentLen = state.ids.Count
             max 0 (maxTransactionsPerEpoch - currentLen)
+        let series = Series.Config.create store
+        let epochs = Epoch.Config.create store
+
         Service(inventoryId, series, epochs, lookBack=lookBackLimit, capacity=remainingEpochCapacity)
-
-module Cosmos =
-
-    let create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (context, cache) =
-        let series = Series.Cosmos.create (context, cache)
-        let epochs = Epoch.Cosmos.create (context, cache)
-        Helpers.create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (series, epochs)
-
-module EventStore =
-
-    let create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (context, cache) =
-        let series = Series.EventStore.create (context, cache)
-        let epochs = Epoch.EventStore.create (context, cache)
-        Helpers.create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (series, epochs)

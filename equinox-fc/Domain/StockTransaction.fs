@@ -130,36 +130,27 @@ let decide update (state : Fold.State) : Action * Events.Event list =
     let state' = Fold.fold state events
     Fold.nextAction state', events
 
-type Service internal (resolve : InventoryTransactionId -> Equinox.Stream<Events.Event, Fold.State>) =
+type Service internal (resolve : InventoryTransactionId -> Equinox.Decider<Events.Event, Fold.State>) =
 
     member __.Apply(transactionId, update) : Async<Action> =
-        let stream = resolve transactionId
-        stream.Transact(decide update)
+        let decider = resolve transactionId
+        decider.Transact(decide update)
 
-let create resolve =
-    // there will generally be a single actor touching it at a given time, so we don't need to do a load (which would be more expensive than normal given the `accessStrategy`) before we sync
-    let opt = Equinox.AllowStale
-    let resolve inventoryTransactionId =
-        let stream = resolve (streamName inventoryTransactionId, opt)
-        Equinox.Stream(Serilog.Log.ForContext<Service>(), stream, maxAttempts=2)
-    Service(resolve)
+open Fc.Domain
 
-module Cosmos =
+module Config =
 
-    open Equinox.Cosmos
+    // Re `Equinox.AllowStale`: there will generally be a single actor touching it at a
+    // given time, so we don't need to do a load (which would be more expensive
+    // than normal given the `accessStrategy`) before we sync
+    let private resolveStream = function
+        // in the happy path case, the event stream will typically be short, and the state cached, so snapshotting is less critical
+        | Config.Store.Cosmos (context, cache) ->
+            let cat = Config.Cosmos.createUnoptimized Events.codec Fold.initial Fold.fold (context, cache)
+            fun sn -> cat.Resolve(sn, option = Equinox.AllowStale)
+        | Config.Store.Esdb (context, cache) ->
+            let cat = Config.Esdb.create Events.codec Fold.initial Fold.fold (context, cache)
+            fun sn -> cat.Resolve(sn, option = Equinox.AllowStale)
 
-    // in the happy path case, the event stream will typically be short, and the state cached, so snapshotting is less critical
-    let accessStrategy = AccessStrategy.Unoptimized
-    let create (context, cache) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        create <| fun (id, opt) -> resolver.Resolve(id, opt)
-
-module EventStore =
-
-    open Equinox.EventStore
-
-    let create (context, cache) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy)
-        create <| fun (id, opt) -> resolver.Resolve(id, opt)
+    let private resolveDecider store = streamName >> resolveStream store >> Config.createDecider
+    let create = resolveDecider >> Service

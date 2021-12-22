@@ -70,7 +70,7 @@ let decideSync capacity events (state : Fold.State) : Result * Events.Event list
     let state' = Fold.fold state events
     { isClosed = closed; added = allowing; rejected = residual; transactionIds = state'.ids }, events
 
-type Service internal (resolve : InventoryId * InventoryEpochId -> Equinox.Stream<Events.Event, Fold.State>) =
+type Service internal (resolve : InventoryId * InventoryEpochId -> Equinox.Decider<Events.Event, Fold.State>) =
 
     /// Attempt ingestion of `events` into the cited Epoch.
     /// - None will be accepted if the Epoch is `closed`
@@ -78,31 +78,21 @@ type Service internal (resolve : InventoryId * InventoryEpochId -> Equinox.Strea
     /// - If the computed capacity result is >= the number of items being submitted (which may be 0), the Epoch will be marked Closed
     /// NOTE the result may include rejected items (which the caller is expected to feed into a successor epoch)
     member __.TryIngest(inventoryId, epochId, capacity, events) : Async<Result> =
-        let stream = resolve (inventoryId, epochId)
-        stream.Transact(decideSync capacity events)
+        let decider = resolve (inventoryId, epochId)
+        decider.Transact(decideSync capacity events)
 
-let create resolve =
-    let resolve ids =
-        let stream = resolve (streamName ids)
-        Equinox.Stream(Serilog.Log.ForContext<Service>(), stream, maxAttempts = 2)
-    Service(resolve)
+open Fc.Domain
 
-module Cosmos =
+module Config =
 
-    open Equinox.Cosmos
+    let private resolveStream = function
+        | Config.Store.Cosmos (context, cache) ->
+            let cat = Config.Cosmos.createSnapshotted Events.codec Fold.initial Fold.fold (Fold.isOrigin, Fold.snapshot) (context, cache)
+            cat.Resolve
+        // No use of RollingSnapshots as we're intentionally making an epoch short enough to simply read any time
+        | Config.Store.Esdb (context, cache) ->
+            let cat = Config.Esdb.create Events.codec Fold.initial Fold.fold (context, cache)
+            cat.Resolve
 
-    let accessStrategy = AccessStrategy.Snapshot (Fold.isOrigin, Fold.snapshot)
-    let create (context, cache) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        create resolver.Resolve
-
-module EventStore =
-
-    open Equinox.EventStore
-
-    // No use of RollingSnapshots as we're intentionally making an epoch short enough to simply read any time
-    let create (context, cache) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy)
-        create resolver.Resolve
+    let private resolveDecider store = streamName >> resolveStream store >> Config.createDecider
+    let create = resolveDecider >> Service

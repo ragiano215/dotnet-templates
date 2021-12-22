@@ -44,24 +44,12 @@ type Service(transactions : StockTransaction.Service, locations : Location.Servi
     member __.Drive(transactionId) = async {
         let! _ = execute transactionId None in () }
 
-module Cosmos =
-
-    let create (context, cache) inventoryId (maxTransactionsPerEpoch, lookBackLimit) (epochLen, idsWindow, maxAttempts) =
+module Config =
+    let create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (epochLen, idsWindow, maxAttempts) store =
         let transactions, locations, inventory =
-            let transactions = StockTransaction.Cosmos.create (context, cache)
+            let transactions = StockTransaction.Config.create store
             let zero, cf, sc = Location.Epoch.zeroBalance, Location.Epoch.toBalanceCarriedForward idsWindow, Location.Epoch.shouldClose epochLen
-            let locations = Location.Cosmos.create (zero, cf, sc) (context, cache, maxAttempts)
-            let inventory = Inventory.Cosmos.create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (context, cache)
-            transactions, locations, inventory
-        Service(transactions, locations, inventory)
-
-module EventStore =
-
-    let create (context, cache) inventoryId (maxTransactionsPerEpoch, lookBackLimit) (epochLen, idsWindow, maxAttempts) =
-        let transactions, locations, inventory =
-            let transactions = StockTransaction.EventStore.create (context, cache)
-            let zero, cf, sc = Location.Epoch.zeroBalance, Location.Epoch.toBalanceCarriedForward idsWindow, Location.Epoch.shouldClose epochLen
-            let locations = Location.EventStore.create (zero, cf, sc) (context, cache, maxAttempts)
-            let inventory = Inventory.EventStore.create inventoryId (maxTransactionsPerEpoch, lookBackLimit) (context, cache)
+            let locations = Location.Config.create (zero, cf, sc) store
+            let inventory = Inventory.Config.create inventoryId (maxTransactionsPerEpoch, lookBackLimit) store
             transactions, locations, inventory
         Service(transactions, locations, inventory)

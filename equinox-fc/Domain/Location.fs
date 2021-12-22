@@ -34,22 +34,9 @@ type Service internal (zeroBalance, toBalanceCarriedForward, shouldClose, series
             | Some activeEpochId -> activeEpochId, activeEpochId, None
         return! execute locationId originEpochId epochId balanceCarriedForward (Pending decide)}
 
-[<AutoOpen>]
-module Helpers =
+module Config =
+    let create (zeroBalance, toBalanceCarriedForward, shouldClose) store =
+        let series = Series.Config.create store
+        let epochs = Epoch.Config.create store
 
-    let create (zeroBalance, toBalanceCarriedForward, shouldClose) (series, epochs) =
         Service(zeroBalance, toBalanceCarriedForward, shouldClose, series, epochs)
-
-module Cosmos =
-
-    let create (zeroBalance, toBalanceCarriedForward, shouldClose) (context, cache, maxAttempts) =
-        let series = Series.Cosmos.create (context, cache, maxAttempts)
-        let epochs = Epoch.Cosmos.create (context, cache, maxAttempts)
-        create (zeroBalance, toBalanceCarriedForward, shouldClose) (series, epochs)
-
-module EventStore =
-
-    let create (zeroBalance, toBalanceCarriedForward, shouldClose) (context, cache, maxAttempts) =
-        let series = Series.EventStore.create (context, cache, maxAttempts)
-        let epochs = Epoch.EventStore.create (context, cache, maxAttempts)
-        create (zeroBalance, toBalanceCarriedForward, shouldClose) (series, epochs)

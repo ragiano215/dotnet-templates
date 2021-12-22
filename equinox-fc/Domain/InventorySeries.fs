@@ -30,42 +30,30 @@ let interpretAdvanceIngestionEpoch epochId (state : Fold.State) =
     if queryActiveEpoch state >= epochId then []
     else [Events.Started { epoch = epochId }]
 
-type Service internal (resolve : InventoryId -> Equinox.Stream<Events.Event, Fold.State>) =
+type Service internal (resolve : InventoryId -> Equinox.Decider<Events.Event, Fold.State>) =
 
     member __.ReadIngestionEpoch(inventoryId) : Async<InventoryEpochId> =
-        let stream = resolve inventoryId
-        stream.Query queryActiveEpoch
+        let decider = resolve inventoryId
+        decider.Query queryActiveEpoch
 
     member __.AdvanceIngestionEpoch(inventoryId, epochId) : Async<unit> =
-        let stream = resolve inventoryId
-        stream.Transact(interpretAdvanceIngestionEpoch epochId)
+        let decider = resolve inventoryId
+        decider.Transact(interpretAdvanceIngestionEpoch epochId)
 
-let create resolve =
+open Fc.Domain
+
+module Config =
+
     // For this stream, we uniformly use stale reads as:
     // a) we don't require any information from competing writers
     // b) while there are competing writers [which might cause us to have to retry a Transact], this should be infrequent
-    let opt = Equinox.ResolveOption.AllowStale
-    let resolve locationId =
-        let stream = resolve (streamName locationId, opt)
-        Equinox.Stream(Serilog.Log.ForContext<Service>(), stream, maxAttempts = 2)
-    Service(resolve)
+    let private resolveStream = function
+        | Config.Store.Cosmos (context, cache) ->
+            let cat = Config.Cosmos.createLatestKnown Events.codec Fold.initial Fold.fold (context, cache)
+            fun sn -> cat.Resolve(sn, option = Equinox.AllowStale)
+        | Config.Store.Esdb (context, cache) ->
+            let cat = Config.Esdb.createLatestKnown Events.codec Fold.initial Fold.fold (context, cache)
+            fun sn -> cat.Resolve(sn, option = Equinox.AllowStale)
 
-module Cosmos =
-
-    open Equinox.Cosmos
-
-    let accessStrategy = AccessStrategy.LatestKnownEvent
-    let create (context, cache) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        create <| fun (id, opt) -> resolver.Resolve(id, opt)
-
-module EventStore =
-
-    open Equinox.EventStore
-
-    let accessStrategy = AccessStrategy.LatestKnownEvent
-    let create (context, cache) =
-        let cacheStrategy = CachingStrategy.SlidingWindow (cache, System.TimeSpan.FromMinutes 20.)
-        let resolver = Resolver(context, Events.codec, Fold.fold, Fold.initial, cacheStrategy, accessStrategy)
-        create <| fun (id, opt) -> resolver.Resolve(id, opt)
+    let private resolveDecider store = streamName >> resolveStream store >> Config.createDecider
+    let create = resolveDecider >> Service
