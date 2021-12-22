@@ -67,4 +67,3 @@ let inline mkId () = Guid.NewGuid() |> (|Id|)
 let (|Ids|) (xs : Guid[]) = xs |> Array.map (|Id|)
 let (|IdsAtLeastOne|) (Ids xs, Id x) = [| yield x; yield! xs |]
 let (|AtLeastOne|) (x, xs) = x::xs
-
