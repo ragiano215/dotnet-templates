@@ -10,7 +10,7 @@ module EnvVar =
 
 module Cosmos =
 
-    open Equinox.Cosmos
+    open Equinox.CosmosStore
     let connect () =
         match EnvVar.tryGet "EQUINOX_COSMOS_CONNECTION", EnvVar.tryGet "EQUINOX_COSMOS_DATABASE", EnvVar.tryGet "EQUINOX_COSMOS_CONTAINER" with
         | Some s, Some d, Some c ->
@@ -35,7 +35,7 @@ module EventStore =
             let discovery = Discovery.GossipDns h
             let connector = Connector(u, p, TimeSpan.FromSeconds 5., 5, Logger.SerilogNormal Serilog.Log.Logger)
             let connection = connector.Establish(appName, discovery, ConnectionStrategy.ClusterSingle NodePreference.Master) |> Async.RunSynchronously
-            let context = Context(connection, BatchingPolicy(500))
+            let context = EventStoreContext(connection, BatchingPolicy(500))
             let cache = Equinox.Cache (appName, 10)
             context, cache
         | h, u, p ->
